@@ -28,21 +28,34 @@ import (
 	"github.com/K0rdent/kcm/test/e2e/clusterdeployment"
 	"github.com/K0rdent/kcm/test/e2e/clusterdeployment/aws"
 	"github.com/K0rdent/kcm/test/e2e/clusterdeployment/clusteridentity"
+	"github.com/K0rdent/kcm/test/e2e/config"
 	"github.com/K0rdent/kcm/test/e2e/kubeclient"
+	"github.com/K0rdent/kcm/test/e2e/logs"
+	"github.com/K0rdent/kcm/test/e2e/templates"
 	"github.com/K0rdent/kcm/test/utils"
 )
 
 var _ = Describe("AWS Templates", Label("provider:cloud", "provider:aws"), Ordered, func() {
 	var (
-		kc                   *kubeclient.KubeClient
-		standaloneClient     *kubeclient.KubeClient
-		standaloneDeleteFunc func() error
-		hostedDeleteFunc     func() error
-		kubecfgDeleteFunc    func() error
-		clusterName          string
+		kc                     *kubeclient.KubeClient
+		standaloneClient       *kubeclient.KubeClient
+		hostedDeleteFuncs      []func() error
+		standaloneDeleteFuncs  []func() error
+		kubeconfigDeleteFuncs  []func() error
+		standaloneClusterNames []string
+		hostedClusterNames     []string
+
+		providerConfigs []config.ProviderTestingConfig
 	)
 
 	BeforeAll(func() {
+		By("get testing configuration")
+		providerConfigs = config.Config[config.TestingProviderAWS]
+
+		if len(providerConfigs) == 0 {
+			Skip("AWS ClusterDeployment testing is skipped")
+		}
+
 		By("providing cluster identity")
 		kc = kubeclient.NewFromLocal(internalutils.DefaultSystemNamespace)
 		ci := clusteridentity.New(kc, clusterdeployment.ProviderAWS)
@@ -53,19 +66,28 @@ var _ = Describe("AWS Templates", Label("provider:cloud", "provider:aws"), Order
 		// If we failed collect logs from each of the affiliated controllers
 		// as well as the output of clusterctl to store as artifacts.
 		if CurrentSpecReport().Failed() && !noCleanup() {
+			if kc != nil {
+				By("collecting failure logs from the management controllers")
+				logs.Collector{
+					Client:        kc,
+					ProviderTypes: []clusterdeployment.ProviderType{clusterdeployment.ProviderAWS, clusterdeployment.ProviderCAPI},
+					ClusterNames:  standaloneClusterNames,
+				}.CollectAll()
+			}
 			if standaloneClient != nil {
 				By("collecting failure logs from hosted controllers")
-				collectLogArtifacts(standaloneClient, clusterName, clusterdeployment.ProviderAWS, clusterdeployment.ProviderCAPI)
+				logs.Collector{
+					Client:        standaloneClient,
+					ProviderTypes: []clusterdeployment.ProviderType{clusterdeployment.ProviderAWS, clusterdeployment.ProviderCAPI},
+					ClusterNames:  hostedClusterNames,
+				}.CollectAll()
 			}
 		}
 
-		By("deleting resources")
-		for _, deleteFunc := range []func() error{
-			kubecfgDeleteFunc,
-			hostedDeleteFunc,
-			standaloneDeleteFunc,
-		} {
-			if deleteFunc != nil {
+		if !noCleanup() {
+			By("deleting resources")
+			deleteFuncs := append(hostedDeleteFuncs, append(standaloneDeleteFuncs, kubeconfigDeleteFuncs...)...)
+			for _, deleteFunc := range deleteFuncs {
 				err := deleteFunc()
 				Expect(err).NotTo(HaveOccurred())
 			}
@@ -73,117 +95,131 @@ var _ = Describe("AWS Templates", Label("provider:cloud", "provider:aws"), Order
 	})
 
 	It("should work with an AWS provider", func() {
-		// Deploy a standalone cluster and verify it is running/ready.
-		// Deploy standalone with an xlarge instance since it will also be
-		// hosting the hosted cluster.
-		GinkgoT().Setenv(clusterdeployment.EnvVarAWSInstanceType, "t3.xlarge")
+		for i, providerConfig := range providerConfigs {
+			_, _ = fmt.Fprintf(GinkgoWriter, "Testing configuration:\n%s\n", providerConfig.String())
+			// Deploy a standalone cluster and verify it is running/ready.
+			// Deploy standalone with an xlarge instance since it will also be
+			// hosting the hosted cluster.
+			GinkgoT().Setenv(clusterdeployment.EnvVarAWSInstanceType, "t3.xlarge")
 
-		templateBy(clusterdeployment.TemplateAWSStandaloneCP, "creating a ClusterDeployment")
-		sd := clusterdeployment.GetUnstructured(clusterdeployment.TemplateAWSStandaloneCP)
-		clusterName = sd.GetName()
+			sdName := clusterdeployment.GenerateClusterName(fmt.Sprintf("aws-%d", i))
+			sdTemplate := providerConfig.Standalone.Template
+			templateBy(templates.TemplateAWSStandaloneCP, fmt.Sprintf("creating a ClusterDeployment %s with template %s", sdName, sdTemplate))
 
-		standaloneDeleteFunc = kc.CreateClusterDeployment(context.Background(), sd)
+			sd := clusterdeployment.GetUnstructured(templates.TemplateAWSStandaloneCP, sdName, sdTemplate)
 
-		templateBy(clusterdeployment.TemplateAWSStandaloneCP, "waiting for infrastructure to deploy successfully")
-		deploymentValidator := clusterdeployment.NewProviderValidator(
-			clusterdeployment.TemplateAWSStandaloneCP,
-			clusterName,
-			clusterdeployment.ValidationActionDeploy,
-		)
+			standaloneDeleteFunc := kc.CreateClusterDeployment(context.Background(), sd)
+			standaloneDeleteFuncs = append(standaloneDeleteFuncs, standaloneDeleteFunc)
+			standaloneClusterNames = append(standaloneClusterNames, sd.GetName())
 
-		Eventually(func() error {
-			return deploymentValidator.Validate(context.Background(), kc)
-		}).WithTimeout(30 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
+			templateBy(templates.TemplateAWSStandaloneCP, "waiting for infrastructure to deploy successfully")
+			deploymentValidator := clusterdeployment.NewProviderValidator(
+				templates.TemplateAWSStandaloneCP,
+				sdName,
+				clusterdeployment.ValidationActionDeploy,
+			)
 
-		templateBy(clusterdeployment.TemplateAWSHostedCP, "installing controller and templates on standalone cluster")
+			Eventually(func() error {
+				return deploymentValidator.Validate(context.Background(), kc)
+			}).WithTimeout(30 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
 
-		// Download the KUBECONFIG for the standalone cluster and load it
-		// so we can call Make targets against this cluster.
-		// TODO(#472): Ideally we shouldn't use Make here and should just
-		// convert these Make targets into Go code, but this will require a
-		// helmclient.
-		var kubeCfgPath string
-		kubeCfgPath, kubecfgDeleteFunc = kc.WriteKubeconfig(context.Background(), clusterName)
-
-		GinkgoT().Setenv("KUBECONFIG", kubeCfgPath)
-		cmd := exec.Command("make", "test-apply")
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(os.Unsetenv("KUBECONFIG")).To(Succeed())
-
-		templateBy(clusterdeployment.TemplateAWSHostedCP, "validating that the controller is ready")
-		standaloneClient = kc.NewFromCluster(context.Background(), internalutils.DefaultSystemNamespace, clusterName)
-		Eventually(func() error {
-			err := verifyControllersUp(standaloneClient)
-			if err != nil {
-				_, _ = fmt.Fprintf(
-					GinkgoWriter, "[%s] controller validation failed: %v\n",
-					string(clusterdeployment.TemplateAWSHostedCP), err)
-				return err
+			if providerConfig.Hosted == nil {
+				continue
 			}
-			return nil
-		}).WithTimeout(15 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
 
-		// Ensure AWS credentials are set in the standalone cluster.
-		clusteridentity.New(standaloneClient, clusterdeployment.ProviderAWS)
+			templateBy(templates.TemplateAWSHostedCP, "installing controller and templates on standalone cluster")
 
-		// Populate the environment variables required for the hosted
-		// cluster.
-		aws.PopulateHostedTemplateVars(context.Background(), kc, clusterName)
+			// Download the KUBECONFIG for the standalone cluster and load it
+			// so we can call Make targets against this cluster.
+			// TODO(#472): Ideally we shouldn't use Make here and should just
+			// convert these Make targets into Go code, but this will require a
+			// helmclient.
+			kubeCfgPath, kubecfgDeleteFunc := kc.WriteKubeconfig(context.Background(), sdName)
+			kubeconfigDeleteFuncs = append(kubeconfigDeleteFuncs, kubecfgDeleteFunc)
 
-		templateBy(clusterdeployment.TemplateAWSHostedCP, "creating a clusterdeployment")
-		hd := clusterdeployment.GetUnstructured(clusterdeployment.TemplateAWSHostedCP)
-		hdName := hd.GetName()
+			GinkgoT().Setenv("KUBECONFIG", kubeCfgPath)
+			cmd := exec.Command("make", "test-apply")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(os.Unsetenv("KUBECONFIG")).To(Succeed())
 
-		// Deploy the hosted cluster on top of the standalone cluster.
-		hostedDeleteFunc = standaloneClient.CreateClusterDeployment(context.Background(), hd)
+			templateBy(templates.TemplateAWSHostedCP, "validating that the controller is ready")
+			standaloneClient = kc.NewFromCluster(context.Background(), internalutils.DefaultSystemNamespace, sdName)
+			Eventually(func() error {
+				err := verifyControllersUp(standaloneClient)
+				if err != nil {
+					_, _ = fmt.Fprintf(
+						GinkgoWriter, "[%s] controller validation failed: %v\n",
+						templates.TemplateAWSHostedCP, err)
+					return err
+				}
+				return nil
+			}).WithTimeout(15 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
 
-		templateBy(clusterdeployment.TemplateAWSHostedCP, "Patching AWSCluster to ready")
-		clusterdeployment.PatchHostedClusterReady(standaloneClient, clusterdeployment.ProviderAWS, hdName)
+			// Ensure AWS credentials are set in the standalone cluster.
+			clusteridentity.New(standaloneClient, clusterdeployment.ProviderAWS)
 
-		// Verify the hosted cluster is running/ready.
-		templateBy(clusterdeployment.TemplateAWSHostedCP, "waiting for infrastructure to deploy successfully")
-		deploymentValidator = clusterdeployment.NewProviderValidator(
-			clusterdeployment.TemplateAWSHostedCP,
-			hdName,
-			clusterdeployment.ValidationActionDeploy,
-		)
-		Eventually(func() error {
-			return deploymentValidator.Validate(context.Background(), standaloneClient)
-		}).WithTimeout(30 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
+			// Populate the environment variables required for the hosted
+			// cluster.
+			aws.PopulateHostedTemplateVars(context.Background(), kc, sdName)
 
-		// Delete the hosted clusterdeployment and verify it is removed.
-		templateBy(clusterdeployment.TemplateAWSHostedCP, "deleting the clusterdeployment")
-		err = hostedDeleteFunc()
-		Expect(err).NotTo(HaveOccurred())
+			hdName := clusterdeployment.GenerateClusterName(fmt.Sprintf("aws-hosted-%d", i))
+			hdTemplate := providerConfig.Hosted.Template
+			templateBy(templates.TemplateAWSHostedCP, fmt.Sprintf("creating a hosted ClusterDeployment %s with template %s", hdName, hdTemplate))
+			hd := clusterdeployment.GetUnstructured(templates.TemplateAWSHostedCP, hdName, hdTemplate)
 
-		deletionValidator := clusterdeployment.NewProviderValidator(
-			clusterdeployment.TemplateAWSHostedCP,
-			hdName,
-			clusterdeployment.ValidationActionDelete,
-		)
-		Eventually(func() error {
-			return deletionValidator.Validate(context.Background(), standaloneClient)
-		}).WithTimeout(10 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
-		// Now delete the standalone clusterdeployment and verify it is
-		// removed, it is deleted last since it is the basis for the hosted
-		// cluster.
-		/*
-			FIXME(#339): This is currently disabled as the deletion of the
-			standalone cluster is failing due to outstanding issues.
-			templateBy(clusterdeployment.TemplateAWSStandaloneCP, "deleting the clusterdeployment")
-			err = standaloneDeleteFunc()
+			// Deploy the hosted cluster on top of the standalone cluster.
+			hostedDeleteFunc := standaloneClient.CreateClusterDeployment(context.Background(), hd)
+			hostedDeleteFuncs = append(hostedDeleteFuncs, hostedDeleteFunc)
+			hostedClusterNames = append(hostedClusterNames, hd.GetName())
+
+			templateBy(templates.TemplateAWSHostedCP, "Patching AWSCluster to ready")
+			clusterdeployment.PatchHostedClusterReady(standaloneClient, clusterdeployment.ProviderAWS, hdName)
+
+			// Verify the hosted cluster is running/ready.
+			templateBy(templates.TemplateAWSHostedCP, "waiting for infrastructure to deploy successfully")
+			deploymentValidator = clusterdeployment.NewProviderValidator(
+				templates.TemplateAWSHostedCP,
+				hdName,
+				clusterdeployment.ValidationActionDeploy,
+			)
+			Eventually(func() error {
+				return deploymentValidator.Validate(context.Background(), standaloneClient)
+			}).WithTimeout(30 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
+
+			// Delete the hosted ClusterDeployment and verify it is removed.
+			templateBy(templates.TemplateAWSHostedCP, "deleting the ClusterDeployment")
+			err = hostedDeleteFunc()
 			Expect(err).NotTo(HaveOccurred())
 
-			deletionValidator = clusterdeployment.NewProviderValidator(
-				clusterdeployment.TemplateAWSStandaloneCP,
-				clusterName,
+			deletionValidator := clusterdeployment.NewProviderValidator(
+				templates.TemplateAWSHostedCP,
+				hdName,
 				clusterdeployment.ValidationActionDelete,
 			)
 			Eventually(func() error {
-				return deletionValidator.Validate(context.Background(), kc)
-			}).WithTimeout(10 * time.Minute).WithPolling(10 *
-				time.Second).Should(Succeed())
-		*/
+				return deletionValidator.Validate(context.Background(), standaloneClient)
+			}).WithTimeout(10 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
+			// Now delete the standalone ClusterDeployment and verify it is
+			// removed, it is deleted last since it is the basis for the hosted
+			// cluster.
+			/*
+				FIXME(#339): This is currently disabled as the deletion of the
+				standalone cluster is failing due to outstanding issues.
+				templateBy(clusterdeployment.TemplateAWSStandaloneCP, "deleting the ClusterDeployment")
+				err = standaloneDeleteFunc()
+				Expect(err).NotTo(HaveOccurred())
+
+				deletionValidator = clusterdeployment.NewProviderValidator(
+					clusterdeployment.TemplateAWSStandaloneCP,
+					clusterName,
+					clusterdeployment.ValidationActionDelete,
+				)
+				Eventually(func() error {
+					return deletionValidator.Validate(context.Background(), kc)
+				}).WithTimeout(10 * time.Minute).WithPolling(10 *
+					time.Second).Should(Succeed())
+			*/
+		}
 	})
 })
