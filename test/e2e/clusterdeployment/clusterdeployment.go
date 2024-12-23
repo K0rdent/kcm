@@ -46,6 +46,7 @@ type Template string
 const (
 	TemplateAWSStandaloneCP     Template = "aws-standalone-cp"
 	TemplateAWSHostedCP         Template = "aws-hosted-cp"
+	TemplateAWSEKS              Template = "aws-eks"
 	TemplateAzureHostedCP       Template = "azure-hosted-cp"
 	TemplateAzureStandaloneCP   Template = "azure-standalone-cp"
 	TemplateVSphereStandaloneCP Template = "vsphere-standalone-cp"
@@ -57,6 +58,9 @@ var awsStandaloneCPClusterDeploymentTemplateBytes []byte
 
 //go:embed resources/aws-hosted-cp.yaml.tpl
 var awsHostedCPClusterDeploymentTemplateBytes []byte
+
+//go:embed resources/aws-eks.yaml.tpl
+var awsEksClusterDeploymentTemplateBytes []byte
 
 //go:embed resources/azure-standalone-cp.yaml.tpl
 var azureStandaloneCPClusterDeploymentTemplateBytes []byte
@@ -126,6 +130,8 @@ func GetUnstructured(templateName Template) *unstructured.Unstructured {
 			EnvVarAWSSecurityGroupID,
 		})
 		clusterDeploymentTemplateBytes = awsHostedCPClusterDeploymentTemplateBytes
+	case TemplateAWSEKS:
+		clusterDeploymentTemplateBytes = awsEksClusterDeploymentTemplateBytes
 	case TemplateVSphereStandaloneCP:
 		clusterDeploymentTemplateBytes = vsphereStandaloneCPClusterDeploymentTemplateBytes
 	case TemplateVSphereHostedCP:

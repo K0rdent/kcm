@@ -69,7 +69,7 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
-	if !noCleanup() {
+	if cleanup() {
 		By("collecting logs from local controllers")
 		kc := kubeclient.NewFromLocal(internalutils.DefaultSystemNamespace)
 		collectLogArtifacts(kc, "")
@@ -227,11 +227,6 @@ func collectLogArtifacts(kc *kubeclient.KubeClient, clusterName string, provider
 	}
 }
 
-func noCleanup() bool {
-	noCleanup := os.Getenv(clusterdeployment.EnvVarNoCleanup)
-	if noCleanup != "" {
-		By(fmt.Sprintf("skipping After node as %s is set", clusterdeployment.EnvVarNoCleanup))
-	}
-
-	return noCleanup != ""
+func cleanup() bool {
+	return os.Getenv(clusterdeployment.EnvVarNoCleanup) == ""
 }
