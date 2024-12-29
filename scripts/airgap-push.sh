@@ -114,8 +114,8 @@ else
     fi
 fi
 
-if [ ! $(command -v jq) ]; then
-    echo "'jq' could not be found, install 'jq' to continue"
+if [ -z ${JQ} ]; then
+    echo "'jq' could not be found, do a 'make cli-install'"
     exit 1
 fi
 
@@ -142,7 +142,7 @@ fi
 # Extract the repositories json file from the extensions bundle.
 echo "Retagging and pushing extension images to ${REPO}..."
 tar -C ${WORK_DIR} -xf ${WORK_DIR}/${extension_tarball_name} "repositories"
-for image in $(cat ${WORK_DIR}/repositories | jq -r 'to_entries[] | .key'); do
+for image in $(cat ${WORK_DIR}/repositories | ${JQ} -r 'to_entries[] | .key'); do
     image_name=$(echo ${image} | grep -o '[^/]*$')
 
     # docker images -a may return multiple images with the same name but
