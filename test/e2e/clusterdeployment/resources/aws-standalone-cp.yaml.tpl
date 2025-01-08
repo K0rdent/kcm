@@ -17,3 +17,7 @@ spec:
       instanceType: ${AWS_INSTANCE_TYPE:=t3.small}
     worker:
       instanceType: ${AWS_INSTANCE_TYPE:=t3.small}
+  services:
+    - template: ingress-nginx-4-11-0
+      name: managed-ingress-nginx
+      namespace: ${SERVICE_NAMESPACE}
