@@ -24,7 +24,8 @@ const (
 	// debugging of test failures.
 	EnvVarNoCleanup = "NO_CLEANUP"
 
-	EnvVarServiceNamespace = "SERVICE_NAMESPACE"
+	EnvVarServiceNamespace = "INGRESS_SERVICE_NAMESPACE"
+	EnvVarServiceName      = "INGRESS_SERVICE_NAME"
 
 	// AWS
 	EnvVarAWSAccessKeyID            = "AWS_ACCESS_KEY_ID"
