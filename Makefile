@@ -1,3 +1,4 @@
+# Just a dummy line to trigger CI
 NAMESPACE ?= hmc-system
 VERSION ?= $(shell git describe --tags --always)
 VERSION := $(patsubst v%,%,$(VERSION))
