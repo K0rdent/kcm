@@ -18,7 +18,6 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/a8m/envsubst"
 	"github.com/google/uuid"
@@ -27,6 +26,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/K0rdent/kcm/test/e2e/templates"
 	"github.com/K0rdent/kcm/test/utils"
 )
 
@@ -39,17 +39,6 @@ const (
 	ProviderVSphere ProviderType = "infrastructure-vsphere"
 
 	providerLabel = "cluster.x-k8s.io/provider"
-)
-
-type Template string
-
-const (
-	TemplateAWSStandaloneCP     Template = "aws-standalone-cp"
-	TemplateAWSHostedCP         Template = "aws-hosted-cp"
-	TemplateAzureHostedCP       Template = "azure-hosted-cp"
-	TemplateAzureStandaloneCP   Template = "azure-standalone-cp"
-	TemplateVSphereStandaloneCP Template = "vsphere-standalone-cp"
-	TemplateVSphereHostedCP     Template = "vsphere-hosted-cp"
 )
 
 //go:embed resources/aws-standalone-cp.yaml.tpl
@@ -84,38 +73,39 @@ func GetProviderLabel(provider ProviderType) string {
 	return fmt.Sprintf("%s=%s", providerLabel, provider)
 }
 
-func setClusterName(templateName Template) {
-	var generatedName string
-
-	mcName := os.Getenv(EnvVarClusterDeploymentName)
-	if mcName == "" {
-		mcName = "e2e-test-" + uuid.New().String()[:8]
+func GenerateClusterName(postfix string) string {
+	mcPrefix := os.Getenv(EnvVarClusterDeploymentPrefix)
+	if mcPrefix == "" {
+		mcPrefix = "e2e-test-" + uuid.New().String()[:8]
 	}
 
-	providerName := strings.Split(string(templateName), "-")[0]
-
-	// Append the provider name to the cluster name to ensure uniqueness between
-	// different deployed ClusterDeployments.
-	generatedName = fmt.Sprintf("%s-%s", mcName, providerName)
-	if strings.Contains(string(templateName), "hosted") {
-		generatedName = fmt.Sprintf("%s-%s", mcName, "hosted")
+	if postfix != "" {
+		return fmt.Sprintf("%s-%s", mcPrefix, postfix)
 	}
+	return mcPrefix
+}
 
-	GinkgoT().Setenv(EnvVarClusterDeploymentName, generatedName)
+func setClusterName(name string) {
+	GinkgoT().Setenv(EnvVarClusterDeploymentName, name)
+}
+
+func setTemplate(templateName string) {
+	GinkgoT().Setenv(EnvVarClusterDeploymentTemplate, templateName)
 }
 
 // GetUnstructured returns an unstructured ClusterDeployment object based on the
 // provider and template.
-func GetUnstructured(templateName Template) *unstructured.Unstructured {
+func GetUnstructured(templateType templates.Type, clusterName, template string) *unstructured.Unstructured {
 	GinkgoHelper()
 
-	setClusterName(templateName)
+	setClusterName(clusterName)
+	setTemplate(template)
 
 	var clusterDeploymentTemplateBytes []byte
-	switch templateName {
-	case TemplateAWSStandaloneCP:
+	switch templateType {
+	case templates.TemplateAWSStandaloneCP:
 		clusterDeploymentTemplateBytes = awsStandaloneCPClusterDeploymentTemplateBytes
-	case TemplateAWSHostedCP:
+	case templates.TemplateAWSHostedCP:
 		// Validate environment vars that do not have defaults are populated.
 		// We perform this validation here instead of within a Before block
 		// since we populate the vars from standalone prior to this step.
@@ -126,16 +116,16 @@ func GetUnstructured(templateName Template) *unstructured.Unstructured {
 			EnvVarAWSSecurityGroupID,
 		})
 		clusterDeploymentTemplateBytes = awsHostedCPClusterDeploymentTemplateBytes
-	case TemplateVSphereStandaloneCP:
+	case templates.TemplateVSphereStandaloneCP:
 		clusterDeploymentTemplateBytes = vsphereStandaloneCPClusterDeploymentTemplateBytes
-	case TemplateVSphereHostedCP:
+	case templates.TemplateVSphereHostedCP:
 		clusterDeploymentTemplateBytes = vsphereHostedCPClusterDeploymentTemplateBytes
-	case TemplateAzureHostedCP:
+	case templates.TemplateAzureHostedCP:
 		clusterDeploymentTemplateBytes = azureHostedCPClusterDeploymentTemplateBytes
-	case TemplateAzureStandaloneCP:
+	case templates.TemplateAzureStandaloneCP:
 		clusterDeploymentTemplateBytes = azureStandaloneCPClusterDeploymentTemplateBytes
 	default:
-		Fail(fmt.Sprintf("Unsupported template: %s", templateName))
+		Fail(fmt.Sprintf("Unsupported template type: %s", templateType))
 	}
 
 	clusterDeploymentConfigBytes, err := envsubst.Bytes(clusterDeploymentTemplateBytes)
