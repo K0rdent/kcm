@@ -279,3 +279,15 @@ func (kc *KubeClient) ListK0sControlPlanes(
 		Resource: "k0scontrolplanes",
 	}, clusterName)
 }
+
+func (kc *KubeClient) ListAWSManagedControlPlanes(
+	ctx context.Context, clusterName string,
+) ([]unstructured.Unstructured, error) {
+	GinkgoHelper()
+
+	return kc.listResource(ctx, schema.GroupVersionResource{
+		Group:    "controlplane.cluster.x-k8s.io",
+		Version:  "v1beta2",
+		Resource: "awsmanagedcontrolplanes",
+	}, clusterName)
+}
