@@ -44,7 +44,7 @@ type ManagementSpec struct {
 	// Providers is the list of supported CAPI providers.
 	Providers []Provider `json:"providers,omitempty"`
 
-	Backup ManagementBackup `json:"backup,omitempty"`
+	Backup Backup `json:"backup,omitempty"`
 }
 
 // Core represents a structure describing core Management components.
@@ -55,15 +55,15 @@ type Core struct {
 	CAPI Component `json:"capi,omitempty"`
 }
 
-// ManagementBackup enables a feature to backup KCM objects into a cloud.
-type ManagementBackup struct {
-	// Schedule is a Cron expression defining when to run the scheduled Backup.
+// Backup enables a feature to backup KCM objects into a cloud.
+type Backup struct {
+	// Schedule is a Cron expression defining when to run the scheduled ManagementBackup.
 	// Default value is to backup every 6 hours.
 	Schedule string `json:"schedule,omitempty"`
 
 	// Flag to indicate whether the backup feature is enabled.
 	// If set to true, [Velero] platform will be installed.
-	// If set to false, creation or modification of Backups/Restores will be blocked.
+	// If set to false, creation or modification of ManagementBackups will be blocked.
 	//
 	// [Velero]: https://velero.io
 	Enabled bool `json:"enabled,omitempty"`
